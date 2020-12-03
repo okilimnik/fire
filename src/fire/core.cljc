@@ -1,24 +1,25 @@
 (ns fire.core
-  (:require [org.httpkit.client :as client]
-            [org.httpkit.sni-client :as sni-client]
-            [cheshire.core :as json]
-            [clojure.core.async :as async]
-            [clojure.java.io :as io]
-            [fire.auth :as fire-auth])            
-  (:refer-clojure :exclude [read])
-  (:gen-class))
+  (:require #?(:clj [clojure.core.async :as async]
+               :cljs [cljs.core.async :as async])
+            [httpurr.client :as http]
+            #?(:cljs [oops.core :refer [oget]])
+            #?(:clj [httpurr.client.aleph :refer [client]]
+               :cljs [httpurr.client.node :refer [client]])
+            [cemerick.url :as url-helper]
+            [fire.auth :as fire-auth]
+            [fire.interop :refer [date exception throwable decode encode]])
+  (:refer-clojure :exclude [read]))
 
-(set! *warn-on-reflection* 1)
+#?(:clj (set! *warn-on-reflection* 1))
 
 (def firebase-root "firebaseio.com")
-(def sni-client (delay (client/make-client {:ssl-configurer sni-client/ssl-configurer})))
 (def http-type {:get    "GET"
                 :post   "POST"
                 :put    "PUT"
                 :patch  "PATCH"
                 :delete "DELETE"})
 (defn thrower [res]
-  (when (instance? Throwable res) (throw res))
+  (when (instance? throwable res) (throw res))
   res)
 
 (defn recursive-merge
@@ -36,7 +37,7 @@
 (defn db-url 
   "Returns a proper Firebase url given a database name and path"
   [db-name path]
-  (let [url (try (str (io/as-url db-name)) (catch Exception _ nil))]
+  (let [url (try (str (url-helper/url db-name)) (catch exception _ nil))]
     (if (nil? url)
       (str (db-base-url db-name) path ".json")
       (str url path ".json"))))
@@ -46,32 +47,43 @@
   [method db-name path data & [auth options]]
   (let [res-ch (async/chan 1)]
     (try
-      (let [now (quot (inst-ms (java.util.Date.)) 1000)
-            token (when auth 
+      (let [now (quot (inst-ms (date.)) 1000)
+            token (when auth
                     (if (< now (:expiry auth))
-                      (:token auth) 
+                      (:token auth)
                       (-> auth :env fire-auth/create-token :token)))
-            request-options (reduce 
-                              recursive-merge [{:query-params {:pretty-print true}}
+            request-options (reduce
+                             recursive-merge [{:query-params {:pretty-print true}}
                                               {:headers {"X-HTTP-Method-Override" (method http-type)}}
                                               {:keepalive 600000}
                                               (when auth {:headers {"Authorization" (str "Bearer " token)}})
-                                              (when (not (nil? data)) {:body (json/generate-string data)})
+                                              (when (not (nil? data)) {:body (encode data)})
                                               (dissoc options :async)])
-            url (db-url db-name path)]
-        (binding [org.httpkit.client/*default-client* sni-client]
-          (client/post url request-options 
-            (fn [response] 
-              (let [res (-> response :body (json/decode true))
-                    error (:error response)]
-                (if error 
-                  (do 
-                    (async/put! res-ch error)
-                    (async/close! res-ch))
-                  (if (nil? res)
-                    (async/close! res-ch)
-                    (async/put! res-ch res))))))))
-      (catch Exception e 
+            url (db-url db-name path)
+            params   (merge {:url url
+                             :method :post}
+                            request-options)
+            on-result (fn [res error]
+                        (if error
+                          (do
+                            (async/put! res-ch error)
+                            (async/close! res-ch))
+                          (if (nil? res)
+                            (async/close! res-ch)
+                            (async/put! res-ch res))))]
+        #?(:clj (http/send! client params
+                            (fn [response]
+                              (let [res (-> response :body decode)
+                                    error (:error response)]
+                                (on-result res error))))
+           :cljs (-> (http/send! client params
+                                 (.then (fn [response]
+                                          (let [res (-> response (oget :body) decode)
+                                                error (oget response :error)]
+                                            (on-result res error))))
+                                 (.catch (fn [e]
+                                           (on-result nil e))))))
+      (catch exception e 
         (async/put! res-ch e)
         (async/close! res-ch)))
       res-ch))  
@@ -82,7 +94,8 @@
   (let [res (request :put db-name path data auth options)]
     (if (:async (merge {} options auth))
       res
-      (-> res async/<!! thrower))))
+      #?(:clj (-> res async/<!! thrower)
+         :cljs res))))
 
 (defn update!
   "Updates data in a Firebase database at a given path via destructively merging."
@@ -90,7 +103,8 @@
   (let [res (request :patch db-name path data auth options)]
     (if (:async (merge {} options auth))
       res
-      (-> res async/<!! thrower))))
+      #?(:clj (-> res async/<!! thrower)
+         :cljs res))))
 
 (defn push!
   "Appends data to a list in a Firebase db at a given path."
@@ -98,7 +112,8 @@
   (let [res (request :post db-name path data auth options)]
     (if (:async (merge {} options auth))
       res
-      (-> res async/<!! thrower))))
+       #?(:clj (-> res async/<!! thrower)
+          :cljs res))))
 
 (defn delete! 
   "Deletes data from Firebase database at a given path"
@@ -106,7 +121,8 @@
   (let [res (request :delete db-name path nil auth options)]
     (if (:async (merge {} options auth))
       res
-      (-> res async/<!! thrower))))
+      #?(:clj (-> res async/<!! thrower)
+         :cljs res))))
 
 (defn escape 
   "Surround all strings in query with quotes"
@@ -120,15 +136,5 @@
                                                        (dissoc options :query)))]
     (if (:async (merge {} options auth))
       res
-      (-> res async/<!! thrower))))
-
-(defn -main []
-  (let [auth (fire-auth/create-token :fire)
-        db (:project-id auth)
-        root "/fire-graalvm-test"]
-    (push! db root {:originalname "graalvm"} auth)
-    (write! db root {:name "graal"} auth)
-    (let [res (read db root auth)]
-      (delete! db root auth)
-      (println res)
-      res)))
+      #?(:clj (-> res async/<!! thrower)
+         :cljs res))))

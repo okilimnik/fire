@@ -2,7 +2,7 @@
   (:require [fire.oauth2 :as oauth2])
   (:gen-class))
 
-(set! *warn-on-reflection* 1)
+#?(:clj (set! *warn-on-reflection* 1))
 
 (defn create-token 
   ([]
