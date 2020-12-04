@@ -1,4 +1,5 @@
 {:deps     {:aliases [:shadow-cljs]}
  :builds    {:app {:target :npm-module
-                   :entries [firebase.core]}}}
+                   :entries [firebase.core]
+                   :output-dir "node_modules/shadow-cljs"}}}
 
