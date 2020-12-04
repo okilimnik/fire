@@ -1,0 +1,4 @@
+{:deps     {:aliases [:shadow-cljs]}
+ :builds    {:app {:target :npm-module
+                   :entries [firebase.core]}}}
+
