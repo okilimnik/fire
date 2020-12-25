@@ -15,3 +15,5 @@ pom.xml.asc
 *.lock
 /.cpcache
 /.shadow-cljs
+/.clj-condo
+/.lsp
