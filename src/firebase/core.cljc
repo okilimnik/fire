@@ -1,10 +1,10 @@
 (ns firebase.core
   (:refer-clojure :exclude [read])
-  (:require 
+  (:require
    #?(:clj [clojure.walk :refer [stringify-keys walk]])
    #?(:clj  [clojure.core.async :as async]
-               :cljs [cljs.core.async :as async])
-            #?(:cljs [oops.core :refer [ocall]]))
+      :cljs [cljs.core.async :as async])
+   #?(:cljs [oops.core :refer [ocall]]))
   (:import #?@(:clj [(com.google.firebase.database ValueEventListener DatabaseReference$CompletionListener DataSnapshot)
                      (java.util HashMap)])))
 
@@ -13,7 +13,6 @@
   [db path data & [options]]
   #?(:clj (let [ref (.getReference db path)
                 stringified (stringify-keys data)]
-            (println "data to write: " stringified)
             (if (:async options)
               (.updateChildren ref stringified (reify DatabaseReference$CompletionListener
                                                  (onComplete [this error ref']
@@ -30,8 +29,8 @@
                 stringified (stringify-keys data)]
             (if (:async options)
               (.updateChildren ref stringified (reify DatabaseReference$CompletionListener
-                                              (onComplete [this error ref']
-                                                (async/put! (:async options) (or error [])))))
+                                                 (onComplete [this error ref']
+                                                   (async/put! (:async options) (or error [])))))
               (.updateChildrenAsync ref stringified)))
      :cljs (let [ref (ocall db :ref path)]
              (ocall ref :update (clj->js data) #(async/put! (:async options) (or % []))))))
@@ -49,17 +48,17 @@
              (ocall ref :push data #(do
                                       (async/put! (:async options) %))))))
 
-  (defn delete!
-    "Deletes data from Firebase database at a given path"
-    [db path & [options]]
-    #?(:clj (let [ref (.getReference db path)]
-              (if (:async options)
-                (.removeValueAsync ref #(async/put! (:async options) %))
-                (.removeValue ref)))
-       :cljs (let [ref (ocall db :ref path)]
-               (ocall ref :remove #(async/put! (:async options) %)))))
-  
-  
+(defn delete!
+  "Deletes data from Firebase database at a given path"
+  [db path & [options]]
+  #?(:clj (let [ref (.getReference db path)]
+            (if (:async options)
+              (.removeValueAsync ref #(async/put! (:async options) %))
+              (.removeValue ref)))
+     :cljs (let [ref (ocall db :ref path)]
+             (ocall ref :remove #(async/put! (:async options) %)))))
+
+
 #?(:clj (defn ->map [data]
           (walk (fn [[k v]]
                   (if (instance? HashMap v)
